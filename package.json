@@ -5,7 +5,7 @@
   "description": "PWA Stok Jalur 1111/1112/1113 dengan Apps Script API proxy",
   "scripts": {
     "dev": "vercel dev",
-    "build": "node -e \"console.log('Static PWA: no build needed')\"",
+    "build": "node scripts/build-static.js",
     "start": "vercel dev"
   },
   "engines": {
