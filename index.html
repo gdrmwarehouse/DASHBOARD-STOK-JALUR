@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="id">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#07111f" />
+  <meta name="description" content="Stok Jalur Online 1111 / 1112 / 1113" />
+  <title>Stok Jalur Online</title>
+  <link rel="manifest" href="/manifest.json" />
+  <link rel="icon" href="/icons/icon-192.png" />
+  <link rel="apple-touch-icon" href="/icons/icon-192.png" />
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body data-theme="dark">
+  <div class="app">
+    <header class="topbar">
+      <div class="brand">
+        <div class="logo">SJ</div>
+        <div>
+          <h1>Stok Jalur Online</h1>
+          <p id="subtitle">Search gabungan 1111 / 1112 / 1113</p>
+        </div>
+      </div>
+      <div class="actions">
+        <button class="btn" id="installBtn" hidden>Install</button>
+        <button class="btn" id="themeBtn">🌙 / ☀️</button>
+        <button class="btn" id="reloadBtn">Reload</button>
+        <button class="btn primary" id="refreshBtn">Update Index</button>
+      </div>
+    </header>
+
+    <section class="hero">
+      <div class="panel searchPanel">
+        <div class="searchWrap">
+          <input id="search" class="searchBox" placeholder="Cari SKU / nama RM / merk / batch / SKU QR..." autocomplete="off" inputmode="search" />
+          <select id="sort" class="select" aria-label="Urutkan">
+            <option value="stock_desc">Stok terbesar</option>
+            <option value="name_asc">Nama A-Z</option>
+            <option value="fifo_asc">FIFO terlama</option>
+            <option value="expired_asc">Expired terdekat</option>
+          </select>
+        </div>
+        <div class="filters" id="plantFilters"></div>
+        <div class="filters" id="statusFilters">
+          <button class="chip active" data-status="ALL">Semua Status</button>
+          <button class="chip" data-status="READY">Ready</button>
+          <button class="chip" data-status="HABIS">Habis</button>
+        </div>
+      </div>
+
+      <div class="panel stats">
+        <div class="stat"><span>RM tampil</span><b id="statItems">0</b></div>
+        <div class="stat"><span>Total PCS</span><b id="statPcs">0</b></div>
+        <div class="stat"><span>Total KG</span><b id="statKg">0</b></div>
+        <div class="stat"><span>Last update</span><b id="statUpdated">-</b></div>
+      </div>
+    </section>
+
+    <main id="content" class="grid">
+      <div class="panel loader">Memuat data index...</div>
+    </main>
+  </div>
+
+  <div id="drawerBackdrop" class="drawerBackdrop"></div>
+  <aside id="drawer" class="drawer" aria-label="Detail stok jalur">
+    <div class="drawerHead">
+      <div>
+        <div class="title" id="drawerTitle">Detail RM</div>
+        <div class="meta" id="drawerMeta"></div>
+      </div>
+      <div class="actions">
+        <a id="openSheet" class="btn" href="#" target="_blank" rel="noopener">Buka Sheet Asli</a>
+        <button class="btn" id="closeDrawerBtn">Tutup</button>
+      </div>
+    </div>
+    <div class="drawerBody" id="drawerBody"></div>
+  </aside>
+
+  <div id="toast" class="toast" role="status"></div>
+  <script src="/app.js" defer></script>
+</body>
+</html>
