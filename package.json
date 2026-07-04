@@ -2,13 +2,10 @@
   "name": "stok-jalur-pwa-universal",
   "version": "1.0.0",
   "private": true,
-  "description": "PWA Stok Jalur 1111/1112/1113 dengan Apps Script API proxy",
   "scripts": {
-    "dev": "vercel dev",
-    "build": "node scripts/build-static.js",
-    "start": "vercel dev"
+    "build": "echo \"Static PWA ready\""
   },
   "engines": {
-    "node": ">=18"
+    "node": "20.x"
   }
 }
