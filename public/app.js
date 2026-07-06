@@ -1,17 +1,22 @@
 const API_BASE = '/api/stok';
-const CACHE_KEY = 'stok_jalur_index_v1';
+const CACHE_KEY = 'stok_jalur_index_v3_menu';
 const THEME_KEY = 'stok_jalur_theme_v1';
 
 let DATA = [];
 let PLANTS = [];
 let activePlant = 'ALL';
 let activeStatus = 'ALL';
+let activeMenu = 'full';
 let deferredInstallPrompt = null;
+let skuResults = [];
+let scannerStream = null;
+let scannerTimer = null;
 window.__renderedItems = [];
+window.__renderedBatches = [];
 
 const fmt = new Intl.NumberFormat('id-ID', { maximumFractionDigits: 2 });
 
-window.addEventListener('beforeinstallprompt', (event) => {
+window.addEventListener('beforeinstallprompt', event => {
   event.preventDefault();
   deferredInstallPrompt = event;
   const btn = document.getElementById('installBtn');
@@ -30,6 +35,16 @@ document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('closeDrawerBtn').addEventListener('click', closeDrawer);
   document.getElementById('drawerBackdrop').addEventListener('click', closeDrawer);
   document.getElementById('installBtn').addEventListener('click', installPwa);
+  document.getElementById('skuSearchBtn').addEventListener('click', searchSkuQrFromInput);
+  document.getElementById('skuQrInput').addEventListener('keydown', event => {
+    if (event.key === 'Enter') searchSkuQrFromInput();
+  });
+  document.getElementById('scanBtn').addEventListener('click', startScanner);
+  document.getElementById('stopScanBtn').addEventListener('click', stopScanner);
+
+  document.querySelectorAll('[data-menu]').forEach(btn => {
+    btn.addEventListener('click', () => setMenu(btn.dataset.menu));
+  });
 
   document.querySelectorAll('[data-status]').forEach(btn => {
     btn.addEventListener('click', () => setStatus(btn.dataset.status));
@@ -103,6 +118,7 @@ function renderPlantFilters() {
 function setPlant(plant) {
   activePlant = plant;
   document.querySelectorAll('[data-plant]').forEach(el => el.classList.toggle('active', el.dataset.plant === plant));
+  if (activeMenu === 'skuqr' && document.getElementById('skuQrInput').value.trim()) searchSkuQrFromInput();
   render();
 }
 
@@ -112,13 +128,29 @@ function setStatus(status) {
   render();
 }
 
+function setMenu(menu) {
+  activeMenu = menu;
+  document.querySelectorAll('[data-menu]').forEach(el => el.classList.toggle('active', el.dataset.menu === menu));
+  document.getElementById('skuPanel').hidden = menu !== 'skuqr';
+  document.getElementById('listControls').hidden = menu === 'skuqr';
+  document.getElementById('statusFilters').hidden = menu !== 'full';
+  if (menu !== 'skuqr') stopScanner();
+  render();
+}
+
 function render() {
+  if (activeMenu === 'skuqr') {
+    renderSkuResults();
+    return;
+  }
+
   const q = normalize(document.getElementById('search').value);
   const sort = document.getElementById('sort').value;
   let items = DATA.slice();
 
   if (activePlant !== 'ALL') items = items.filter(x => x.plant === activePlant);
-  if (activeStatus !== 'ALL') items = items.filter(x => x.status === activeStatus);
+  if (activeMenu === 'available') items = items.filter(x => x.status === 'READY' && Number(x.totalPcs || 0) > 0);
+  if (activeMenu === 'full' && activeStatus !== 'ALL') items = items.filter(x => x.status === activeStatus);
   if (q) {
     const words = q.split(' ').filter(Boolean);
     items = items.filter(x => words.every(w => (x.keyword || normalize(Object.values(x).join(' '))).includes(w)));
@@ -131,14 +163,16 @@ function render() {
     return (Number(b.totalPcs || 0)) - (Number(a.totalPcs || 0));
   });
 
-  updateStats(items);
-  renderCards(items);
+  updateStats(items, activeMenu === 'available' ? 'RM ready' : 'RM tampil');
+  if (activeMenu === 'available') renderAvailableTable(items);
+  else renderCards(items);
 }
 
-function updateStats(items) {
-  const pcs = items.reduce((s, x) => s + Number(x.totalPcs || 0), 0);
-  const kg = items.reduce((s, x) => s + Number(x.totalKg || 0), 0);
+function updateStats(items, label = 'RM tampil') {
+  const pcs = items.reduce((s, x) => s + Number(x.totalPcs || x.stokPcs || 0), 0);
+  const kg = items.reduce((s, x) => s + Number(x.totalKg || x.stokKg || 0), 0);
   const updated = items.reduce((a, x) => (x.updatedAt || '') > a ? x.updatedAt : a, '');
+  document.getElementById('statItemsLabel').textContent = label;
   document.getElementById('statItems').textContent = fmt.format(items.length);
   document.getElementById('statPcs').textContent = fmt.format(pcs);
   document.getElementById('statKg').textContent = fmt.format(kg);
@@ -177,29 +211,76 @@ function renderCards(items) {
       </div>
     </article>
   `).join('');
-  content.querySelectorAll('[data-index]').forEach(card => card.addEventListener('click', () => openDetail(Number(card.dataset.index))));
+  content.querySelectorAll('[data-index]').forEach(card => card.addEventListener('click', () => openDetailByItem(window.__renderedItems[Number(card.dataset.index)], false)));
 }
 
-async function openDetail(index) {
-  const item = window.__renderedItems[index];
+function renderAvailableTable(items) {
+  const content = document.getElementById('content');
+  window.__renderedItems = items;
+
+  if (!items.length) {
+    content.className = 'panel empty';
+    content.innerHTML = 'Tidak ada stok READY untuk filter ini.';
+    return;
+  }
+
+  content.className = 'panel tablePanel';
+  content.innerHTML = `
+    <div class="tableHead">
+      <div>
+        <h2>Stok Tersedia</h2>
+        <p>Hanya raw material yang masih READY. Klik baris untuk lihat detail keluar per batch.</p>
+      </div>
+      <span class="badge good">${fmt.format(items.length)} RM READY</span>
+    </div>
+    <div class="tableWrap">
+      <table class="dataTable">
+        <thead>
+          <tr>
+            <th>Plant</th><th>SKU</th><th>Nama RM</th><th>Merk</th><th>PCS</th><th>KG</th><th>Batch</th><th>FIFO</th><th>Expired</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${items.map((item, idx) => `
+            <tr data-index="${idx}">
+              <td><span class="plantPill">${escapeHtml(item.plant)}</span></td>
+              <td>${escapeHtml(item.sku || '-')}</td>
+              <td><b>${escapeHtml(item.nama || item.sheetName)}</b><div class="rowSub">${escapeHtml(item.sheetName)}</div></td>
+              <td>${escapeHtml(item.merk || '-')}</td>
+              <td class="num">${fmt.format(item.totalPcs || 0)}</td>
+              <td class="num">${fmt.format(item.totalKg || 0)}</td>
+              <td class="num">${fmt.format(item.batchReady || 0)}</td>
+              <td>${escapeHtml(item.fifoDate || '-')}</td>
+              <td>${escapeHtml(item.expiredNearest || '-')}</td>
+            </tr>
+          `).join('')}
+        </tbody>
+      </table>
+    </div>
+  `;
+  content.querySelectorAll('[data-index]').forEach(row => row.addEventListener('click', () => openDetailByItem(window.__renderedItems[Number(row.dataset.index)], true)));
+}
+
+async function openDetailByItem(item, readyOnly) {
   if (!item) return;
 
   document.getElementById('drawerTitle').textContent = item.nama || item.sheetName;
-  document.getElementById('drawerMeta').textContent = `Plant ${item.plant} • SKU ${item.sku || '-'} ${item.merk ? '• ' + item.merk : ''}`;
+  document.getElementById('drawerMeta').textContent = `Plant ${item.plant} • SKU ${item.sku || '-'} ${item.merk ? '• ' + item.merk : ''}${readyOnly ? ' • READY saja' : ''}`;
   document.getElementById('openSheet').href = item.url || '#';
   document.getElementById('drawerBody').innerHTML = '<div class="loader">Memuat detail batch...</div>';
-  document.getElementById('drawerBackdrop').classList.add('open');
-  document.getElementById('drawer').classList.add('open');
+  openDrawer();
 
   try {
     const res = await api('batches', { plant: item.plant, sheetName: item.sheetName });
-    renderDetail(item, res.batches || []);
+    let batches = res.batches || [];
+    if (readyOnly) batches = batches.filter(b => Number(b.stokPcs || 0) > 0);
+    renderDetail(item, batches, readyOnly);
   } catch (err) {
     document.getElementById('drawerBody').innerHTML = `<div class="empty">${escapeHtml(err.message || err)}</div>`;
   }
 }
 
-function renderDetail(item, batches) {
+function renderDetail(item, batches, readyOnly) {
   const totalPcs = batches.reduce((s, b) => s + Number(b.stokPcs || 0), 0);
   const totalKg = batches.reduce((s, b) => s + Number(b.stokKg || 0), 0);
   const ready = batches.filter(b => Number(b.stokPcs || 0) > 0).length;
@@ -209,14 +290,15 @@ function renderDetail(item, batches) {
       <div class="stat"><span>Total PCS</span><b>${fmt.format(totalPcs)}</b></div>
       <div class="stat"><span>Total KG</span><b>${fmt.format(totalKg)}</b></div>
       <div class="stat"><span>Batch Ready</span><b>${fmt.format(ready)}</b></div>
-      <div class="stat"><span>Total Batch</span><b>${fmt.format(batches.length)}</b></div>
+      <div class="stat"><span>${readyOnly ? 'Batch Ditampilkan' : 'Total Batch'}</span><b>${fmt.format(batches.length)}</b></div>
     </div>
+    ${readyOnly ? '<div class="notice">Mode Stok Tersedia: batch HABIS disembunyikan.</div>' : ''}
     ${batches.map(renderBatch).join('') || '<div class="empty">Belum ada batch di cache.</div>'}
   `;
 }
 
 function renderBatch(b) {
-  const outRows = (b.keluar || []).filter(x => x.tanggal || x.qtyPcs || x.sisaPcs);
+  const outRows = (b.keluar || []).filter(x => x.tanggal || x.qtyPcs || x.sisaPcs || x.hasSisaPcs);
   return `
     <section class="batch">
       <div class="batchMain">
@@ -233,7 +315,7 @@ function renderBatch(b) {
         <div class="mini"><small>Stok PCS</small><b>${fmt.format(b.stokPcs || 0)}</b></div>
         <div class="mini"><small>Stok KG</small><b>${fmt.format(b.stokKg || 0)}</b></div>
       </div>
-      ${b.keterangan ? `<div class="batchInfo" style="grid-template-columns:1fr"><div class="mini"><small>Keterangan</small>${escapeHtml(b.keterangan)}</div></div>` : ''}
+      ${b.keterangan ? `<div class="batchInfo one"><div class="mini"><small>Keterangan</small>${escapeHtml(b.keterangan)}</div></div>` : ''}
       <div class="outTable">
         ${outRows.length ? `
           <table>
@@ -244,6 +326,157 @@ function renderBatch(b) {
       </div>
     </section>
   `;
+}
+
+async function searchSkuQrFromInput() {
+  const q = document.getElementById('skuQrInput').value.trim();
+  if (!q) {
+    skuResults = [];
+    renderSkuResults();
+    toast('Masukkan / scan SKU QR dulu.');
+    return;
+  }
+
+  setLoading('Mencari SKU QR...');
+  try {
+    const res = await api('skuqr', { q, plant: activePlant, readyOnly: 1 });
+    skuResults = res.batches || [];
+    renderSkuResults();
+  } catch (err) {
+    skuResults = [];
+    setError(err);
+  }
+}
+
+function renderSkuResults() {
+  const content = document.getElementById('content');
+  const q = document.getElementById('skuQrInput').value.trim();
+  window.__renderedBatches = skuResults;
+  updateStats(skuResults, 'Batch ready');
+
+  if (!q && !skuResults.length) {
+    content.className = 'panel empty skuEmpty';
+    content.innerHTML = `
+      <h2>Scan / cari SKU QR</h2>
+      <p>Masukkan SKU QR lalu klik Cari. Setelah hasil muncul, klik batch untuk melihat stok jalur dan history keluar sampai stok terakhir.</p>
+    `;
+    return;
+  }
+
+  if (!skuResults.length) {
+    content.className = 'panel empty';
+    content.innerHTML = `Tidak ada batch READY untuk SKU QR: <b>${escapeHtml(q || '-')}</b>. Coba update index atau cek apakah batch sudah habis.`;
+    return;
+  }
+
+  content.className = 'grid skuGrid';
+  content.innerHTML = skuResults.map((b, idx) => `
+    <article class="panel card skuCard" data-batch-index="${idx}">
+      <div class="cardTop">
+        <div>
+          <div class="title">${escapeHtml(b.nama || b.sheetName)}</div>
+          <div class="meta">SKU ${escapeHtml(b.sku || '-')} ${b.merk ? '• ' + escapeHtml(b.merk) : ''}</div>
+          <div class="meta">Plant ${escapeHtml(b.plant)} • ${escapeHtml(b.sheetName)}</div>
+        </div>
+        <span class="badge good">READY</span>
+      </div>
+      <div class="skuQrBox">${escapeHtml(b.skuQr || '-')}</div>
+      <div class="numbers">
+        <div class="mini"><small>Stok PCS</small><b>${fmt.format(b.stokPcs || 0)}</b></div>
+        <div class="mini"><small>Stok KG</small><b>${fmt.format(b.stokKg || 0)}</b></div>
+      </div>
+      <div class="fifo">
+        <span>Datang: <b>${escapeHtml(b.tanggalDatang || '-')}</b></span>
+        <span>Batch: <b>${escapeHtml(b.noBatch || '-')}</b></span>
+        <span>EXP: <b>${escapeHtml(b.expired || '-')}</b></span>
+      </div>
+    </article>
+  `).join('');
+
+  content.querySelectorAll('[data-batch-index]').forEach(card => card.addEventListener('click', () => openSkuBatch(window.__renderedBatches[Number(card.dataset.batchIndex)])));
+}
+
+function openSkuBatch(batch) {
+  if (!batch) return;
+  document.getElementById('drawerTitle').textContent = batch.nama || batch.sheetName;
+  document.getElementById('drawerMeta').textContent = `Plant ${batch.plant} • SKU ${batch.sku || '-'} • SKU QR ${batch.skuQr || '-'}`;
+  document.getElementById('openSheet').href = batch.url || '#';
+  document.getElementById('drawerBody').innerHTML = `
+    <div class="detailStats">
+      <div class="stat"><span>Stok PCS</span><b>${fmt.format(batch.stokPcs || 0)}</b></div>
+      <div class="stat"><span>Stok KG</span><b>${fmt.format(batch.stokKg || 0)}</b></div>
+      <div class="stat"><span>Qty Datang PCS</span><b>${fmt.format(batch.qtyDatangPcs || 0)}</b></div>
+      <div class="stat"><span>Status</span><b>${escapeHtml(batch.status || '-')}</b></div>
+    </div>
+    <div class="notice">Detail ini khusus SKU QR yang discan/manual, dan hanya batch READY yang ditampilkan di menu ini.</div>
+    ${renderBatch(batch)}
+  `;
+  openDrawer();
+}
+
+async function startScanner() {
+  if (!('BarcodeDetector' in window)) {
+    toast('Scanner kamera belum didukung di browser ini. Gunakan Chrome Android atau input manual.');
+    return;
+  }
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    toast('Kamera tidak tersedia di browser ini. Gunakan input manual.');
+    return;
+  }
+
+  stopScanner();
+
+  try {
+    scannerStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' }, audio: false });
+    const video = document.getElementById('scannerVideo');
+    video.srcObject = scannerStream;
+    await video.play();
+
+    document.getElementById('scannerBox').hidden = false;
+    document.getElementById('scanBtn').hidden = true;
+    document.getElementById('stopScanBtn').hidden = false;
+
+    const detector = new BarcodeDetector({ formats: ['qr_code', 'code_128', 'code_39', 'ean_13'] });
+    scannerTimer = setInterval(async () => {
+      try {
+        const codes = await detector.detect(video);
+        if (codes && codes.length) {
+          const value = codes[0].rawValue || '';
+          if (value) {
+            document.getElementById('skuQrInput').value = value.trim();
+            toast('QR terbaca: ' + value.trim());
+            stopScanner();
+            searchSkuQrFromInput();
+          }
+        }
+      } catch (err) {}
+    }, 450);
+  } catch (err) {
+    stopScanner();
+    toast('Kamera gagal dibuka: ' + (err.message || err));
+  }
+}
+
+function stopScanner() {
+  if (scannerTimer) clearInterval(scannerTimer);
+  scannerTimer = null;
+  if (scannerStream) {
+    scannerStream.getTracks().forEach(track => track.stop());
+  }
+  scannerStream = null;
+  const video = document.getElementById('scannerVideo');
+  if (video) video.srcObject = null;
+  const box = document.getElementById('scannerBox');
+  if (box) box.hidden = true;
+  const scanBtn = document.getElementById('scanBtn');
+  const stopBtn = document.getElementById('stopScanBtn');
+  if (scanBtn) scanBtn.hidden = false;
+  if (stopBtn) stopBtn.hidden = true;
+}
+
+function openDrawer() {
+  document.getElementById('drawerBackdrop').classList.add('open');
+  document.getElementById('drawer').classList.add('open');
 }
 
 function closeDrawer() {
@@ -296,7 +529,7 @@ function toast(text) {
   el.textContent = text;
   el.classList.add('show');
   clearTimeout(window.__toastTimer);
-  window.__toastTimer = setTimeout(() => el.classList.remove('show'), 3200);
+  window.__toastTimer = setTimeout(() => el.classList.remove('show'), 3600);
 }
 
 function normalize(v) {
