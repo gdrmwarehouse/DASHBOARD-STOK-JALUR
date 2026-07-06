@@ -2,58 +2,92 @@
 <html lang="id">
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
   <meta name="theme-color" content="#07111f" />
-  <meta name="description" content="Stok Jalur Online 1111 / 1112 / 1113" />
   <title>Stok Jalur Online</title>
   <link rel="manifest" href="/manifest.json" />
-  <link rel="icon" href="/icons/icon-192.png" />
-  <link rel="apple-touch-icon" href="/icons/icon-192.png" />
   <link rel="stylesheet" href="/styles.css" />
 </head>
 <body data-theme="dark">
   <div class="app">
-    <header class="topbar">
-      <div class="brand">
-        <div class="logo">SJ</div>
-        <div>
-          <h1>Stok Jalur Online</h1>
-          <p id="subtitle">Search gabungan 1111 / 1112 / 1113</p>
-        </div>
+    <header class="hero">
+      <div>
+        <div class="eyebrow">PWA • 1111 / 1112 / 1113</div>
+        <h1>Stok Jalur Online</h1>
+        <p id="subtitle">Memuat data...</p>
       </div>
-      <div class="actions">
-        <button class="btn" id="installBtn" hidden>Install</button>
-        <button class="btn" id="themeBtn">🌙 / ☀️</button>
-        <button class="btn" id="reloadBtn">Reload</button>
+      <div class="heroActions">
+        <button class="btn ghost" id="installBtn" hidden>Install</button>
+        <button class="btn ghost" id="themeBtn">Mode</button>
+        <button class="btn ghost" id="reloadBtn">Reload</button>
         <button class="btn primary" id="refreshBtn">Update Index</button>
       </div>
     </header>
 
-    <section class="hero">
-      <div class="panel searchPanel">
-        <div class="searchWrap">
-          <input id="search" class="searchBox" placeholder="Cari SKU / nama RM / merk / batch / SKU QR..." autocomplete="off" inputmode="search" />
-          <select id="sort" class="select" aria-label="Urutkan">
-            <option value="stock_desc">Stok terbesar</option>
-            <option value="name_asc">Nama A-Z</option>
-            <option value="fifo_asc">FIFO terlama</option>
-            <option value="expired_asc">Expired terdekat</option>
-          </select>
+    <nav class="menuTabs" aria-label="Menu utama">
+      <button class="menuTab active" data-menu="full">
+        <b>1</b>
+        <span>Stok Jalur Full</span>
+        <small>Tampilan lengkap seperti sekarang</small>
+      </button>
+      <button class="menuTab" data-menu="available">
+        <b>2</b>
+        <span>Stok Tersedia</span>
+        <small>Ready saja, tabel ringkas</small>
+      </button>
+      <button class="menuTab" data-menu="skuqr">
+        <b>3</b>
+        <span>Cari SJ by SKU QR</span>
+        <small>Scan / manual SKU QR</small>
+      </button>
+    </nav>
+
+    <section class="panel controls" id="listControls">
+      <div class="searchRow">
+        <input id="search" type="search" placeholder="Cari SKU, nama RM, merk, batch, SKU QR..." autocomplete="off" />
+        <select id="sort">
+          <option value="stock_desc">Stok terbesar</option>
+          <option value="name_asc">Nama A-Z</option>
+          <option value="fifo_asc">FIFO terlama</option>
+          <option value="expired_asc">Expired terdekat</option>
+        </select>
+      </div>
+      <div class="filters" id="plantFilters"></div>
+      <div class="filters" id="statusFilters">
+        <button class="chip active" data-status="ALL">Semua Status</button>
+        <button class="chip" data-status="READY">Ready</button>
+        <button class="chip" data-status="HABIS">Habis</button>
+      </div>
+    </section>
+
+    <section class="panel skuPanel" id="skuPanel" hidden>
+      <div class="skuIntro">
+        <div>
+          <h2>Pencarian Stok Jalur by SKU QR</h2>
+          <p>Scan QR atau ketik manual. Hasil yang tampil default hanya batch yang masih <b>READY</b>.</p>
         </div>
-        <div class="filters" id="plantFilters"></div>
-        <div class="filters" id="statusFilters">
-          <button class="chip active" data-status="ALL">Semua Status</button>
-          <button class="chip" data-status="READY">Ready</button>
-          <button class="chip" data-status="HABIS">Habis</button>
-        </div>
+        <span class="badge good">READY ONLY</span>
       </div>
 
-      <div class="panel stats">
-        <div class="stat"><span>RM tampil</span><b id="statItems">0</b></div>
-        <div class="stat"><span>Total PCS</span><b id="statPcs">0</b></div>
-        <div class="stat"><span>Total KG</span><b id="statKg">0</b></div>
-        <div class="stat"><span>Last update</span><b id="statUpdated">-</b></div>
+      <div class="skuSearchRow">
+        <input id="skuQrInput" type="search" placeholder="Scan / ketik SKU QR, contoh: 1112x..." autocomplete="off" />
+        <button class="btn primary" id="skuSearchBtn">Cari</button>
+        <button class="btn" id="scanBtn">Scan Kamera</button>
+        <button class="btn danger" id="stopScanBtn" hidden>Stop</button>
       </div>
+
+      <div class="scannerBox" id="scannerBox" hidden>
+        <video id="scannerVideo" playsinline muted></video>
+        <div class="scanFrame"></div>
+        <p id="scanInfo">Arahkan kamera ke QR SKU.</p>
+      </div>
+    </section>
+
+    <section class="panel stats" id="statsPanel">
+      <div class="stat"><span id="statItemsLabel">RM tampil</span><b id="statItems">0</b></div>
+      <div class="stat"><span>Total PCS</span><b id="statPcs">0</b></div>
+      <div class="stat"><span>Total KG</span><b id="statKg">0</b></div>
+      <div class="stat"><span>Last update</span><b id="statUpdated">-</b></div>
     </section>
 
     <main id="content" class="grid">
