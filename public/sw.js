@@ -1,4 +1,4 @@
-const CACHE_NAME = 'stok-jalur-shell-v3-menu';
+const CACHE_NAME = 'stok-jalur-shell-v4-export-excel';
 
 const APP_SHELL = [
   '/',
