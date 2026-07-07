@@ -87,6 +87,8 @@ input:focus, select:focus { border-color: var(--accent); box-shadow: 0 0 0 3px r
 .loader, .empty { padding: 28px; text-align: center; color: var(--muted); }
 .tablePanel { padding: 16px; }
 .tableHead { align-items: center; margin-bottom: 12px; }
+.tableActions { display: flex; align-items: center; justify-content: flex-end; gap: 10px; flex-wrap: wrap; }
+.btn:disabled { opacity: .55; cursor: wait; transform: none; }
 .tableHead h2, .skuIntro h2 { margin: 0 0 3px; }
 .tableWrap { overflow: auto; max-height: calc(100vh - 360px); border-radius: 18px; border: 1px solid var(--line); }
 table { width: 100%; border-collapse: collapse; min-width: 900px; }
@@ -123,7 +125,7 @@ tbody tr:hover { background: rgba(87,215,255,.08); }
   .stats, .detailStats, .batchInfo { grid-template-columns: repeat(2, 1fr); }
   .searchRow, .skuSearchRow { grid-template-columns: 1fr; }
   .drawerHead { flex-direction: column; }
-  .actions { justify-content: flex-start; }
+  .actions, .tableActions { justify-content: flex-start; }
 }
 @media (max-width: 520px) {
   .app { padding: 14px; }
