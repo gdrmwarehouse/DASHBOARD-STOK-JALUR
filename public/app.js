@@ -31,6 +31,8 @@ document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('sort').addEventListener('change', render);
   document.getElementById('reloadBtn').addEventListener('click', () => loadData(true));
   document.getElementById('refreshBtn').addEventListener('click', refreshIndex);
+  const downloadAvailableBtn = document.getElementById('downloadAvailableBtn');
+  if (downloadAvailableBtn) downloadAvailableBtn.addEventListener('click', downloadAvailableExcel);
   document.getElementById('themeBtn').addEventListener('click', toggleTheme);
   document.getElementById('closeDrawerBtn').addEventListener('click', closeDrawer);
   document.getElementById('drawerBackdrop').addEventListener('click', closeDrawer);
@@ -231,7 +233,10 @@ function renderAvailableTable(items) {
         <h2>Stok Tersedia</h2>
         <p>Hanya raw material yang masih READY. Klik baris untuk lihat detail keluar per batch.</p>
       </div>
-      <span class="badge good">${fmt.format(items.length)} RM READY</span>
+      <div class="tableActions">
+        <button class="btn primary" id="downloadAvailableBtn" type="button">Download Excel</button>
+        <span class="badge good">${fmt.format(items.length)} RM READY</span>
+      </div>
     </div>
     <div class="tableWrap">
       <table class="dataTable">
@@ -258,7 +263,150 @@ function renderAvailableTable(items) {
       </table>
     </div>
   `;
+  const exportBtn = document.getElementById('downloadAvailableBtn');
+  if (exportBtn) exportBtn.addEventListener('click', downloadAvailableExcel);
   content.querySelectorAll('[data-index]').forEach(row => row.addEventListener('click', () => openDetailByItem(window.__renderedItems[Number(row.dataset.index)], true)));
+}
+
+async function downloadAvailableExcel() {
+  if (activeMenu !== 'available') {
+    setMenu('available');
+  }
+
+  const q = document.getElementById('search').value || '';
+  const plant = activePlant || 'ALL';
+  const btn = document.getElementById('downloadAvailableBtn');
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = 'Menyiapkan...';
+  }
+
+  toast('Menyiapkan file Excel stok tersedia...');
+
+  try {
+    const res = await api('available_export', { plant, q });
+    const rows = res.rows || [];
+    if (!rows.length) {
+      toast('Tidak ada data READY untuk didownload.');
+      return;
+    }
+
+    const title = `STOK_TERSEDIA_${plant === 'ALL' ? 'SEMUA_PLANT' : plant}`;
+    exportRowsToExcel(title, rows, res);
+    toast('Excel stok tersedia berhasil dibuat.');
+  } catch (err) {
+    toast('Download gagal: ' + (err.message || err));
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = 'Download Excel';
+    }
+  }
+}
+
+function exportRowsToExcel(title, rows, meta) {
+  const headers = [
+    'NO',
+    'PLANT',
+    'SKU RM',
+    'NAMA RM',
+    'MERK',
+    'TOTAL PCS READY',
+    'TOTAL KG READY',
+    'JUMLAH BATCH READY',
+    'FIFO / KEDATANGAN TERLAMA',
+    'EXPIRED TERDEKAT',
+    'NOTE KEDATANGAN'
+  ];
+
+  const safeTitle = title.replace(/[^A-Z0-9_ -]/gi, '_');
+  const printedAt = new Date().toLocaleString('id-ID');
+  const plantText = meta && meta.plant ? meta.plant : (activePlant || 'ALL');
+  const qText = meta && meta.q ? meta.q : (document.getElementById('search').value || '');
+
+  const tableRows = rows.map((row, idx) => [
+    idx + 1,
+    row.plant || '',
+    row.sku || '',
+    row.nama || '',
+    row.merk || '',
+    numberForExcel(row.totalPcs),
+    numberForExcel(row.totalKg),
+    numberForExcel(row.batchReady),
+    row.fifoDate || '',
+    row.expiredNearest || '',
+    row.noteKedatangan || ''
+  ]);
+
+  const html = `
+    <html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel" xmlns="http://www.w3.org/TR/REC-html40">
+    <head>
+      <meta charset="UTF-8" />
+      <!--[if gte mso 9]>
+      <xml>
+        <x:ExcelWorkbook>
+          <x:ExcelWorksheets>
+            <x:ExcelWorksheet>
+              <x:Name>Stok Tersedia</x:Name>
+              <x:WorksheetOptions><x:DisplayGridlines/></x:WorksheetOptions>
+            </x:ExcelWorksheet>
+          </x:ExcelWorksheets>
+        </x:ExcelWorkbook>
+      </xml>
+      <![endif]-->
+      <style>
+        body { font-family: Arial, sans-serif; }
+        table { border-collapse: collapse; }
+        th { background: #d9ead3; font-weight: bold; text-align: center; }
+        th, td { border: 1px solid #777; padding: 6px; vertical-align: top; }
+        .title { font-size: 18px; font-weight: bold; background: #073763; color: #fff; }
+        .meta { background: #f3f6fa; font-weight: bold; }
+        .num { mso-number-format:"0.00"; text-align: right; }
+        .text { mso-number-format:"\@"; }
+      </style>
+    </head>
+    <body>
+      <table>
+        <tr><td class="title" colspan="${headers.length}">LAPORAN STOK TERSEDIA</td></tr>
+        <tr><td class="meta" colspan="${headers.length}">Plant: ${escapeExcel(plantText)} | Filter: ${escapeExcel(qText || '-')} | Dibuat: ${escapeExcel(printedAt)}</td></tr>
+        <tr>${headers.map(h => `<th>${escapeExcel(h)}</th>`).join('')}</tr>
+        ${tableRows.map(r => `<tr>${r.map((cell, colIdx) => {
+          const cls = [0,5,6,7].includes(colIdx) ? 'num' : 'text';
+          return `<td class="${cls}">${escapeExcel(cell)}</td>`;
+        }).join('')}</tr>`).join('')}
+      </table>
+    </body>
+    </html>
+  `;
+
+  const blob = new Blob(['\ufeff', html], { type: 'application/vnd.ms-excel;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `${safeTitle}_${todayKeyForFile()}.xls`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+function numberForExcel(v) {
+  const n = Number(v || 0);
+  return Number.isFinite(n) ? Math.round(n * 100) / 100 : 0;
+}
+
+function todayKeyForFile() {
+  const d = new Date();
+  const yyyy = d.getFullYear();
+  const mm = String(d.getMonth() + 1).padStart(2, '0');
+  const dd = String(d.getDate()).padStart(2, '0');
+  const hh = String(d.getHours()).padStart(2, '0');
+  const mi = String(d.getMinutes()).padStart(2, '0');
+  return `${yyyy}${mm}${dd}_${hh}${mi}`;
+}
+
+function escapeExcel(v) {
+  return String(v ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
 
 async function openDetailByItem(item, readyOnly) {
