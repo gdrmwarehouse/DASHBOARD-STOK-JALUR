@@ -1,5 +1,10 @@
 const API_BASE = '/api/stok';
-const CACHE_KEY = 'stok_jalur_index_v3_menu';
+const CACHE_KEY = 'stok_jalur_index_runtime_only_v4';
+const LEGACY_DATA_CACHE_KEYS = [
+  'stok_jalur_index_v3_menu',
+  'stok_jalur_index_v2',
+  'stok_jalur_index_v1'
+];
 const THEME_KEY = 'stok_jalur_theme_v1';
 
 let DATA = [];
@@ -26,6 +31,7 @@ window.addEventListener('beforeinstallprompt', event => {
 document.addEventListener('DOMContentLoaded', () => {
   const savedTheme = localStorage.getItem(THEME_KEY);
   if (savedTheme) document.body.dataset.theme = savedTheme;
+  purgeOldLargeDataCache();
 
   document.getElementById('search').addEventListener('input', render);
   document.getElementById('sort').addEventListener('change', render);
@@ -70,32 +76,41 @@ async function api(action, params = {}) {
 }
 
 async function loadData(forceNetwork) {
-  setLoading('Memuat data index...');
-
-  if (!forceNetwork) {
-    const cached = readLocalCache();
-    if (cached && Array.isArray(cached.items) && cached.items.length) {
-      applyInitialData(cached, true);
-    }
-  }
+  setLoading('Memuat data index online...');
 
   try {
     const res = await api('initial');
-    localStorage.setItem(CACHE_KEY, JSON.stringify(res));
+    rememberSmallMeta(res);
     applyInitialData(res, false);
   } catch (err) {
-    const cached = readLocalCache();
-    if (cached && Array.isArray(cached.items) && cached.items.length) {
-      applyInitialData(cached, true);
-      toast('Mode cache offline: ' + (err.message || err));
-    } else {
-      setError(err);
-    }
+    setError(err);
+  }
+}
+
+function purgeOldLargeDataCache() {
+  try {
+    LEGACY_DATA_CACHE_KEYS.concat([CACHE_KEY]).forEach(key => localStorage.removeItem(key));
+  } catch (err) {
+    // Browser private mode / low storage can block localStorage; ignore safely.
+  }
+}
+
+function rememberSmallMeta(res) {
+  // Jangan simpan full index ke localStorage. Data stok bisa besar dan di beberapa HP
+  // melewati quota browser. Simpan metadata kecil saja agar reload tetap aman.
+  try {
+    localStorage.setItem(CACHE_KEY, JSON.stringify({
+      updatedAt: res && res.updatedAt ? res.updatedAt : '',
+      count: res && Array.isArray(res.items) ? res.items.length : 0,
+      savedAt: new Date().toISOString()
+    }));
+  } catch (err) {
+    try { localStorage.removeItem(CACHE_KEY); } catch (_) {}
   }
 }
 
 function readLocalCache() {
-  try { return JSON.parse(localStorage.getItem(CACHE_KEY) || 'null'); } catch { return null; }
+  return null;
 }
 
 function applyInitialData(res, fromCache) {
@@ -639,7 +654,7 @@ async function refreshIndex() {
   toast('Update index berjalan...');
   try {
     const res = await api('refresh', { plant, pin });
-    localStorage.setItem(CACHE_KEY, JSON.stringify(res));
+    rememberSmallMeta(res);
     applyInitialData(res, false);
     toast('Index selesai diupdate');
   } catch (err) {
