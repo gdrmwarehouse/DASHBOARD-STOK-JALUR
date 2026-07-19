@@ -12,7 +12,7 @@
   <div class="app">
     <header class="hero">
       <div>
-        <div class="eyebrow">PLANT • 1111 | 1112 | 1113</div>
+        <div class="eyebrow">PWA • 1111 / 1112 / 1113</div>
         <h1>Stok Jalur Online</h1>
         <p id="subtitle">Memuat data...</p>
       </div>
@@ -28,17 +28,17 @@
       <button class="menuTab active" data-menu="full">
         <b>1</b>
         <span>Stok Jalur Full</span>
-        <small>Detail lengkap full history</small>
+        <small>Tampilan lengkap seperti sekarang</small>
       </button>
       <button class="menuTab" data-menu="available">
         <b>2</b>
         <span>Stok Tersedia</span>
-        <small>Hanya menampilkan stok yang tersedia saat ini</small>
+        <small>Ready saja, tabel ringkas</small>
       </button>
       <button class="menuTab" data-menu="skuqr">
         <b>3</b>
         <span>Cari SJ by SKU QR</span>
-        <small>Scan / manual untuk melihat stok jalur barang tersebut</small>
+        <small>Scan / manual SKU QR</small>
       </button>
     </nav>
 
@@ -88,6 +88,17 @@
       <div class="stat"><span>Total PCS</span><b id="statPcs">0</b></div>
       <div class="stat"><span>Total KG</span><b id="statKg">0</b></div>
       <div class="stat"><span>Last update</span><b id="statUpdated">-</b></div>
+    </section>
+
+    <section class="panel alertCenter" id="alertCenter">
+      <div class="alertHead">
+        <div>
+          <h2>Alert Center</h2>
+          <p>Kontrol lifetime barang di gudang dan expired &lt;30 / &lt;60 / &lt;90 hari per plant pemilik. Format: Plant, Nama RM - Merk, tanggal datang, stok saat ini, keterangan.</p>
+        </div>
+        <div class="alertSummary" id="alertSummary"></div>
+      </div>
+      <div class="alertList" id="alertList">Memuat alert...</div>
     </section>
 
     <main id="content" class="grid">
