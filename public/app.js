@@ -6,14 +6,22 @@ const LEGACY_DATA_CACHE_KEYS = [
   'stok_jalur_index_v1'
 ];
 const THEME_KEY = 'stok_jalur_theme_v1';
+const ALERT_EXP_30_DAYS = 30;
+const ALERT_EXP_60_DAYS = 60;
+const ALERT_EXP_90_DAYS = 90;
+const CRITICAL_EXPIRED_DAYS = 7;
+const ALERT_FILTER_LABELS = { ALL: 'Semua READY', LIFETIME: 'Lifetime', EXPIRED: 'Expired', EXP30: 'Exp <30', EXP60: 'Exp <60', EXP90: 'Exp <90' };
 
 let DATA = [];
 let PLANTS = [];
 let activePlant = 'ALL';
 let activeStatus = 'ALL';
+let activeAlertFilter = 'ALL';
 let activeMenu = 'full';
 let deferredInstallPrompt = null;
 let skuResults = [];
+let ALERT_ROWS = [];
+let alertDebounceTimer = null;
 let scannerStream = null;
 let scannerTimer = null;
 window.__renderedItems = [];
@@ -33,7 +41,10 @@ document.addEventListener('DOMContentLoaded', () => {
   if (savedTheme) document.body.dataset.theme = savedTheme;
   purgeOldLargeDataCache();
 
-  document.getElementById('search').addEventListener('input', render);
+  document.getElementById('search').addEventListener('input', () => {
+    render();
+    scheduleLoadAlerts();
+  });
   document.getElementById('sort').addEventListener('change', render);
   document.getElementById('reloadBtn').addEventListener('click', () => loadData(true));
   document.getElementById('refreshBtn').addEventListener('click', refreshIndex);
@@ -119,6 +130,7 @@ function applyInitialData(res, fromCache) {
   document.getElementById('subtitle').textContent = `${fromCache ? 'Cache offline' : 'Online'} • ${DATA.length} raw material • update ${res.updatedAt || '-'}`;
   renderPlantFilters();
   render();
+  loadAlerts();
 }
 
 function renderPlantFilters() {
@@ -136,6 +148,7 @@ function setPlant(plant) {
   activePlant = plant;
   document.querySelectorAll('[data-plant]').forEach(el => el.classList.toggle('active', el.dataset.plant === plant));
   if (activeMenu === 'skuqr' && document.getElementById('skuQrInput').value.trim()) searchSkuQrFromInput();
+  loadAlerts();
   render();
 }
 
@@ -153,6 +166,229 @@ function setMenu(menu) {
   document.getElementById('statusFilters').hidden = menu !== 'full';
   if (menu !== 'skuqr') stopScanner();
   render();
+}
+
+
+
+function scheduleLoadAlerts() {
+  clearTimeout(alertDebounceTimer);
+  alertDebounceTimer = setTimeout(() => loadAlerts(), 350);
+}
+
+async function loadAlerts() {
+  const list = document.getElementById('alertList');
+  if (list) list.innerHTML = '<div class="alertEmpty">Memuat Alert Center...</div>';
+
+  try {
+    const q = document.getElementById('search') ? document.getElementById('search').value || '' : '';
+    const res = await api('alerts', { plant: activePlant || 'ALL', q });
+    ALERT_ROWS = res.rows || [];
+    renderAlertCenter();
+  } catch (err) {
+    ALERT_ROWS = [];
+    const summary = document.getElementById('alertSummary');
+    const listBox = document.getElementById('alertList');
+    if (summary) summary.innerHTML = '';
+    if (listBox) listBox.innerHTML = `<div class="alertEmpty">Alert Center gagal dimuat: ${escapeHtml(err.message || err)}</div>`;
+  }
+}
+
+function renderAlertCenter() {
+  const box = document.getElementById('alertCenter');
+  const summary = document.getElementById('alertSummary');
+  const list = document.getElementById('alertList');
+  if (!box || !summary || !list) return;
+
+  const baseRows = ALERT_ROWS.slice();
+  const rows = filterAlertRows(baseRows, activeAlertFilter);
+  const totals = summarizeAlertRows(rows);
+  const baseTotals = summarizeAlertRows(baseRows);
+
+  summary.innerHTML = `
+    <div class="alertMini total"><small>Total Baris</small><b>${fmt.format(totals.count)}</b></div>
+    <div class="alertMini good"><small>Total PCS</small><b>${fmt.format(totals.pcs)}</b></div>
+    <div class="alertMini good"><small>Total KG</small><b>${fmt.format(totals.kg)}</b></div>
+    <div class="alertMini danger"><small>Expired</small><b>${fmt.format(baseTotals.expired)}</b></div>
+    <div class="alertMini warn"><small>Exp &lt;30 Hari</small><b>${fmt.format(baseTotals.exp30)}</b></div>
+    <div class="alertMini near"><small>Exp &lt;60 Hari</small><b>${fmt.format(baseTotals.exp60)}</b></div>
+    <div class="alertMini near"><small>Exp &lt;90 Hari</small><b>${fmt.format(baseTotals.exp90)}</b></div>
+  `;
+
+  const filters = Object.entries(ALERT_FILTER_LABELS);
+  const plantOptions = [{ plant: 'ALL', label: 'Semua Plant' }].concat(PLANTS || []);
+  const plantTools = plantOptions.map(p => `
+    <button class="chip ${activePlant === p.plant ? 'active' : ''}" data-alert-plant="${escapeHtml(p.plant)}" type="button">${escapeHtml(p.label || p.plant)}</button>
+  `).join('');
+  const alertTools = `
+    <div class="alertToolGroup">
+      <span>Plant Pemilik</span>
+      <div class="alertTools">${plantTools}</div>
+    </div>
+    <div class="alertToolGroup">
+      <span>Status Alert</span>
+      <div class="alertTools">${filters.map(([key, label]) => `<button class="chip ${activeAlertFilter === key ? 'active' : ''}" data-alert-filter="${key}" type="button">${escapeHtml(label)}</button>`).join('')}<button class="btn primary smallBtn" id="downloadAlertBtn" type="button">Download Excel Alert</button></div>
+    </div>
+  `;
+
+  if (!baseRows.length) {
+    list.innerHTML = `
+      ${alertTools}
+      <div class="alertEmpty">Tidak ada batch READY untuk filter plant/search ini.</div>
+    `;
+    bindAlertFilterButtons(list);
+    bindAlertPlantButtons(list);
+    bindAlertDownloadButton(list);
+    return;
+  }
+
+  const sortedRows = rows.slice().sort(sortAlertRows);
+  window.__alertRows = sortedRows;
+
+  list.innerHTML = `
+    ${alertTools}
+    <div class="alertTableWrap">
+      <table class="alertTable">
+        <thead>
+          <tr>
+            <th>PLANT PEMILIK</th>
+            <th>NAMA RM - MERK</th>
+            <th>TANGGAL DATANG</th>
+            <th>STOK SAAT INI</th>
+            <th>KETERANGAN</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${sortedRows.map((row, idx) => renderAlertTableRow(row, idx)).join('')}
+        </tbody>
+      </table>
+    </div>
+  `;
+
+  bindAlertFilterButtons(list);
+  bindAlertPlantButtons(list);
+  bindAlertDownloadButton(list);
+  list.querySelectorAll('[data-alert-index]').forEach(row => {
+    row.addEventListener('click', () => openAlertBatch(window.__alertRows[Number(row.dataset.alertIndex)]));
+  });
+}
+
+function bindAlertFilterButtons(root) {
+  root.querySelectorAll('[data-alert-filter]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      activeAlertFilter = btn.dataset.alertFilter || 'ALL';
+      renderAlertCenter();
+    });
+  });
+}
+
+function bindAlertPlantButtons(root) {
+  root.querySelectorAll('[data-alert-plant]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      setPlant(btn.dataset.alertPlant || 'ALL');
+    });
+  });
+}
+
+function bindAlertDownloadButton(root) {
+  const btn = root.querySelector('#downloadAlertBtn');
+  if (btn) btn.addEventListener('click', downloadAlertExcel);
+}
+
+function filterAlertRows(rows, filter) {
+  if (filter === 'LIFETIME') return rows.filter(r => Number.isFinite(Number(r.lifeDays))).sort(sortAlertRows);
+  if (filter === 'EXPIRED') return rows.filter(r => r.expiredBucket === 'EXPIRED');
+  if (filter === 'EXP30') return rows.filter(r => r.expiredBucket === 'EXP30');
+  if (filter === 'EXP60') return rows.filter(r => ['EXP30', 'EXP60'].includes(r.expiredBucket));
+  if (filter === 'EXP90') return rows.filter(r => ['EXP30', 'EXP60', 'EXP90'].includes(r.expiredBucket));
+  return rows;
+}
+
+function summarizeAlertRows(rows) {
+  return rows.reduce((acc, row) => {
+    acc.count += 1;
+    acc.pcs += Number(row.stokPcs || 0);
+    acc.kg += Number(row.stokKg || 0);
+    const d = Number(row.expiredDays);
+    if (row.expiredBucket === 'EXPIRED') acc.expired += 1;
+    if (Number.isFinite(d) && d >= 0 && d <= ALERT_EXP_30_DAYS) acc.exp30 += 1;
+    if (Number.isFinite(d) && d >= 0 && d <= ALERT_EXP_60_DAYS) acc.exp60 += 1;
+    if (Number.isFinite(d) && d >= 0 && d <= ALERT_EXP_90_DAYS) acc.exp90 += 1;
+    return acc;
+  }, { count: 0, pcs: 0, kg: 0, expired: 0, exp30: 0, exp60: 0, exp90: 0 });
+}
+
+function sortAlertRows(a, b) {
+  const priority = { EXPIRED: 0, EXP30: 1, EXP60: 2, EXP90: 3, SAFE: 4, NO_DATE: 5 };
+  const pa = priority[a.expiredBucket] ?? 9;
+  const pb = priority[b.expiredBucket] ?? 9;
+  if (pa !== pb) return pa - pb;
+  const ad = Number.isFinite(Number(a.expiredDays)) ? Number(a.expiredDays) : 999999;
+  const bd = Number.isFinite(Number(b.expiredDays)) ? Number(b.expiredDays) : 999999;
+  if (ad !== bd) return ad - bd;
+  return Number(b.lifeDays || 0) - Number(a.lifeDays || 0);
+}
+
+function renderAlertTableRow(row, idx) {
+  const name = formatNameMerk(row);
+  const lifeText = Number.isFinite(Number(row.lifeDays)) ? `LIFE TIME : ${fmt.format(row.lifeDays)} HARI` : 'LIFE TIME : -';
+  const expText = formatExpiredKet(row);
+  const alertClass = row.expiredBucket === 'EXPIRED' ? 'danger' : row.expiredBucket === 'EXP30' ? 'warn' : ['EXP60','EXP90'].includes(row.expiredBucket) ? 'near' : '';
+
+  return `
+    <tr data-alert-index="${idx}" class="${escapeHtml(alertClass)}">
+      <td><span class="plantPill">${escapeHtml(row.plant || '-')}</span></td>
+      <td>
+        <b>${escapeHtml(name)}</b>
+        <div class="rowSub">SKU ${escapeHtml(row.sku || '-')} • ${escapeHtml(row.skuQr || '-')}</div>
+      </td>
+      <td>${escapeHtml(row.tanggalDatang || '-')}</td>
+      <td>
+        <b>${fmt.format(row.stokPcs || 0)} PCS/ZAK</b>
+        <div class="rowSub">${fmt.format(row.stokKg || 0)} KG</div>
+      </td>
+      <td>
+        <div class="ketLine">${escapeHtml(lifeText)}</div>
+        <div class="ketLine ${escapeHtml(alertClass)}">${escapeHtml(expText)}</div>
+      </td>
+    </tr>
+  `;
+}
+
+function formatNameMerk(row) {
+  const nama = String(row.nama || row.sheetName || '-').trim();
+  const merk = String(row.merk || '').trim();
+  if (!merk || merk === '-') return nama;
+  if (nama.toLowerCase().includes(merk.toLowerCase())) return nama;
+  return `${nama} - ${merk}`;
+}
+
+function formatExpiredKet(row) {
+  const d = Number(row.expiredDays);
+  if (row.expiredBucket === 'NO_DATE') return 'EXPIRED : TANGGAL KOSONG';
+  if (row.expiredBucket === 'EXPIRED') return `EXPIRED : LEWAT ${fmt.format(Math.abs(d || 0))} HARI`;
+  if (row.expiredBucket === 'EXP30') return `EXPIRED : <30 HARI (${fmt.format(d)} hari lagi)`;
+  if (row.expiredBucket === 'EXP60') return `EXPIRED : <60 HARI (${fmt.format(d)} hari lagi)`;
+  if (row.expiredBucket === 'EXP90') return `EXPIRED : <90 HARI (${fmt.format(d)} hari lagi)`;
+  if (Number.isFinite(d)) return `EXPIRED : AMAN (${fmt.format(d)} hari lagi)`;
+  return 'EXPIRED : -';
+}
+
+function openAlertBatch(batch) {
+  if (!batch) return;
+  document.getElementById('drawerTitle').textContent = formatNameMerk(batch);
+  document.getElementById('drawerMeta').textContent = `Plant ${batch.plant} • SKU ${batch.sku || '-'} • Datang ${batch.tanggalDatang || '-'} • ${formatExpiredKet(batch)}`;
+  document.getElementById('openSheet').href = batch.url || '#';
+  document.getElementById('drawerBody').innerHTML = `
+    <div class="detailStats">
+      <div class="stat"><span>Stok PCS</span><b>${fmt.format(batch.stokPcs || 0)}</b></div>
+      <div class="stat"><span>Stok KG</span><b>${fmt.format(batch.stokKg || 0)}</b></div>
+      <div class="stat"><span>Life Time</span><b>${Number.isFinite(Number(batch.lifeDays)) ? fmt.format(batch.lifeDays) + ' hari' : '-'}</b></div>
+      <div class="stat"><span>Expired</span><b>${Number.isFinite(Number(batch.expiredDays)) ? fmt.format(batch.expiredDays) + ' hari' : '-'}</b></div>
+    </div>
+    <div class="notice">Alert Center membaca batch READY. Keterangan dihitung dari tanggal datang dan tanggal expired pada cache terbaru.</div>
+    ${renderBatch(batch)}
+  `;
+  openDrawer();
 }
 
 function render() {
@@ -215,7 +451,7 @@ function renderCards(items) {
           <div class="meta">${escapeHtml(item.sku)} ${item.merk ? '• ' + escapeHtml(item.merk) : ''}</div>
           <div class="meta">Plant ${escapeHtml(item.plant)} • ${escapeHtml(item.sheetName)}</div>
         </div>
-        <span class="badge ${item.status === 'READY' ? 'good' : 'bad'}">${escapeHtml(item.status || '-')}</span>
+        <div class="badgeStack"><span class="badge ${item.status === 'READY' ? 'good' : 'bad'}">${escapeHtml(item.status || '-')}</span>${renderExpiryBadge(item.expiredNearest)}</div>
       </div>
       <div class="numbers">
         <div class="mini"><small>Total PCS</small><b>${fmt.format(item.totalPcs || 0)}</b></div>
@@ -257,7 +493,7 @@ function renderAvailableTable(items) {
       <table class="dataTable">
         <thead>
           <tr>
-            <th>Plant</th><th>SKU</th><th>Nama RM</th><th>Merk</th><th>PCS</th><th>KG</th><th>Batch</th><th>FIFO</th><th>Expired</th>
+            <th>Plant</th><th>SKU</th><th>Nama RM</th><th>Merk</th><th>PCS</th><th>KG</th><th>Batch</th><th>FIFO</th><th>Expired</th><th>Alert</th>
           </tr>
         </thead>
         <tbody>
@@ -272,6 +508,7 @@ function renderAvailableTable(items) {
               <td class="num">${fmt.format(item.batchReady || 0)}</td>
               <td>${escapeHtml(item.fifoDate || '-')}</td>
               <td>${escapeHtml(item.expiredNearest || '-')}</td>
+              <td>${renderExpiryBadge(item.expiredNearest)}</td>
             </tr>
           `).join('')}
         </tbody>
@@ -281,6 +518,128 @@ function renderAvailableTable(items) {
   const exportBtn = document.getElementById('downloadAvailableBtn');
   if (exportBtn) exportBtn.addEventListener('click', downloadAvailableExcel);
   content.querySelectorAll('[data-index]').forEach(row => row.addEventListener('click', () => openDetailByItem(window.__renderedItems[Number(row.dataset.index)], true)));
+}
+
+async function downloadAlertExcel() {
+  const rows = filterAlertRows(ALERT_ROWS.slice(), activeAlertFilter).sort(sortAlertRows);
+  const btn = document.getElementById('downloadAlertBtn');
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = 'Menyiapkan...';
+  }
+
+  try {
+    if (!rows.length) {
+      toast('Tidak ada data alert untuk didownload.');
+      return;
+    }
+    const plant = activePlant || 'ALL';
+    const filterLabel = ALERT_FILTER_LABELS[activeAlertFilter] || activeAlertFilter || 'Semua READY';
+    const title = `ALERT_CENTER_${plant === 'ALL' ? 'SEMUA_PLANT' : plant}_${String(activeAlertFilter || 'ALL')}`;
+    exportAlertRowsToExcel(title, rows, { plant, filterLabel });
+    toast('Excel Alert Center berhasil dibuat.');
+  } catch (err) {
+    toast('Download alert gagal: ' + (err.message || err));
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = 'Download Excel Alert';
+    }
+  }
+}
+
+function exportAlertRowsToExcel(title, rows, meta) {
+  const headers = [
+    'NO',
+    'PLANT PEMILIK',
+    'NAMA RM - MERK',
+    'SKU RM',
+    'SKU QR',
+    'TANGGAL DATANG',
+    'TANGGAL EXPIRED',
+    'STOK PCS/ZAK',
+    'STOK KG',
+    'LIFE TIME HARI',
+    'SISA HARI EXPIRED',
+    'KETERANGAN'
+  ];
+
+  const printedAt = new Date().toLocaleString('id-ID');
+  const plantText = meta && meta.plant ? meta.plant : (activePlant || 'ALL');
+  const filterText = meta && meta.filterLabel ? meta.filterLabel : (ALERT_FILTER_LABELS[activeAlertFilter] || activeAlertFilter || '-');
+  const qText = document.getElementById('search') ? document.getElementById('search').value || '' : '';
+  const safeTitle = title.replace(/[^A-Z0-9_ -]/gi, '_');
+
+  const tableRows = rows.map((row, idx) => {
+    const lifeDays = Number.isFinite(Number(row.lifeDays)) ? Number(row.lifeDays) : '';
+    const expiredDays = Number.isFinite(Number(row.expiredDays)) ? Number(row.expiredDays) : '';
+    const ket = `${Number.isFinite(Number(row.lifeDays)) ? `LIFE TIME : ${fmt.format(row.lifeDays)} HARI` : 'LIFE TIME : -'}; ${formatExpiredKet(row)}`;
+    return [
+      idx + 1,
+      row.plant || '',
+      formatNameMerk(row),
+      row.sku || '',
+      row.skuQr || '',
+      row.tanggalDatang || '',
+      row.expired || '',
+      numberForExcel(row.stokPcs),
+      numberForExcel(row.stokKg),
+      lifeDays,
+      expiredDays,
+      ket
+    ];
+  });
+
+  const html = `
+    <html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel" xmlns="http://www.w3.org/TR/REC-html40">
+    <head>
+      <meta charset="UTF-8" />
+      <!--[if gte mso 9]>
+      <xml>
+        <x:ExcelWorkbook>
+          <x:ExcelWorksheets>
+            <x:ExcelWorksheet>
+              <x:Name>Alert Center</x:Name>
+              <x:WorksheetOptions><x:DisplayGridlines/></x:WorksheetOptions>
+            </x:ExcelWorksheet>
+          </x:ExcelWorksheets>
+        </x:ExcelWorkbook>
+      </xml>
+      <![endif]-->
+      <style>
+        body { font-family: Arial, sans-serif; }
+        table { border-collapse: collapse; }
+        th { background: #fce5cd; font-weight: bold; text-align: center; }
+        th, td { border: 1px solid #777; padding: 6px; vertical-align: top; }
+        .title { font-size: 18px; font-weight: bold; background: #073763; color: #fff; }
+        .meta { background: #f3f6fa; font-weight: bold; }
+        .num { mso-number-format:"0.00"; text-align: right; }
+        .text { mso-number-format:"\@"; }
+      </style>
+    </head>
+    <body>
+      <table>
+        <tr><td class="title" colspan="${headers.length}">LAPORAN ALERT CENTER STOK JALUR</td></tr>
+        <tr><td class="meta" colspan="${headers.length}">Plant Pemilik: ${escapeExcel(plantText)} | Filter Alert: ${escapeExcel(filterText)} | Search: ${escapeExcel(qText || '-')} | Dibuat: ${escapeExcel(printedAt)}</td></tr>
+        <tr>${headers.map(h => `<th>${escapeExcel(h)}</th>`).join('')}</tr>
+        ${tableRows.map(r => `<tr>${r.map((cell, colIdx) => {
+          const cls = [0,7,8,9,10].includes(colIdx) ? 'num' : 'text';
+          return `<td class="${cls}">${escapeExcel(cell)}</td>`;
+        }).join('')}</tr>`).join('')}
+      </table>
+    </body>
+    </html>
+  `;
+
+  const blob = new Blob(['\ufeff', html], { type: 'application/vnd.ms-excel;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `${safeTitle}_${todayKeyForFile()}.xls`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
 async function downloadAvailableExcel() {
@@ -470,7 +829,7 @@ function renderBatch(b) {
           <div class="batchSub">Datang: ${escapeHtml(b.tanggalDatang || '-')} • Batch: ${escapeHtml(b.noBatch || '-')} • Exp: ${escapeHtml(b.expired || '-')}</div>
           <div class="batchSub">Supplier: ${escapeHtml(b.supplier || '-')} • PO/GR: ${escapeHtml(b.poGr || '-')}</div>
         </div>
-        <span class="badge ${b.status === 'READY' ? 'good' : 'bad'}">${escapeHtml(b.status || '-')}</span>
+        <div class="badgeStack"><span class="badge ${b.status === 'READY' ? 'good' : 'bad'}">${escapeHtml(b.status || '-')}</span>${renderExpiryBadge(b.expired)}</div>
       </div>
       <div class="batchInfo">
         <div class="mini"><small>Qty Datang PCS</small><b>${fmt.format(b.qtyDatangPcs || 0)}</b></div>
@@ -706,7 +1065,48 @@ function keyDate(v) {
   if (m && months[m[2]]) return `${m[3]}${months[m[2]]}${String(m[1]).padStart(2,'0')}`;
   m = s.match(/(\d{4})[-\/](\d{1,2})[-\/](\d{1,2})/);
   if (m) return `${m[1]}${String(m[2]).padStart(2,'0')}${String(m[3]).padStart(2,'0')}`;
+  m = s.match(/(\d{1,2})[-\/](\d{1,2})[-\/](\d{2,4})/);
+  if (m) {
+    const y = m[3].length === 2 ? '20' + m[3] : m[3];
+    return `${y}${String(m[2]).padStart(2,'0')}${String(m[1]).padStart(2,'0')}`;
+  }
   return '99999999';
+}
+
+
+function getExpiryInfo(expiredText) {
+  const key = keyDate(expiredText);
+  if (!expiredText || key === '99999999') {
+    return { status: 'NO_DATE', className: 'muted', daysLeft: null, label: 'Tanggal expired kosong' };
+  }
+
+  const yyyy = Number(key.slice(0, 4));
+  const mm = Number(key.slice(4, 6));
+  const dd = Number(key.slice(6, 8));
+  const expDate = new Date(yyyy, mm - 1, dd);
+  const today = new Date();
+  const todayStart = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+  const daysLeft = Math.ceil((expDate.getTime() - todayStart.getTime()) / 86400000);
+
+  if (daysLeft < 0) {
+    return { status: 'EXPIRED', className: 'danger', daysLeft, label: `Expired ${Math.abs(daysLeft)} hari lalu` };
+  }
+  if (daysLeft <= CRITICAL_EXPIRED_DAYS) {
+    return { status: 'CRITICAL', className: 'warn', daysLeft, label: `${daysLeft} hari lagi` };
+  }
+  if (daysLeft <= ALERT_EXP_30_DAYS) {
+    return { status: 'NEAR', className: 'near', daysLeft, label: `${daysLeft} hari lagi` };
+  }
+  return { status: 'SAFE', className: 'safe', daysLeft, label: `${daysLeft} hari lagi` };
+}
+
+function renderExpiryBadge(expiredText) {
+  const exp = getExpiryInfo(expiredText);
+  if (exp.status === 'SAFE') return '';
+  if (exp.status === 'NO_DATE') return '<span class="badge muted">EXP kosong</span>';
+  const title = expiredText ? `${expiredText} • ${exp.label}` : exp.label;
+  const label = exp.status === 'EXPIRED' ? 'EXPIRED' : exp.status === 'CRITICAL' ? 'KRITIS EXP' : 'NEAR EXP';
+  return `<span class="badge ${escapeHtml(exp.className)}" title="${escapeHtml(title)}">${label}</span>`;
 }
 
 function escapeHtml(v) {
