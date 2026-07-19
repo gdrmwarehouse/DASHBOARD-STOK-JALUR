@@ -17,6 +17,7 @@ let PLANTS = [];
 let activePlant = 'ALL';
 let activeStatus = 'ALL';
 let activeAlertFilter = 'ALL';
+let activeAlertSearch = '';
 let activeMenu = 'full';
 let deferredInstallPrompt = null;
 let skuResults = [];
@@ -43,7 +44,6 @@ document.addEventListener('DOMContentLoaded', () => {
 
   document.getElementById('search').addEventListener('input', () => {
     render();
-    scheduleLoadAlerts();
   });
   document.getElementById('sort').addEventListener('change', render);
   document.getElementById('reloadBtn').addEventListener('click', () => loadData(true));
@@ -161,10 +161,21 @@ function setStatus(status) {
 function setMenu(menu) {
   activeMenu = menu;
   document.querySelectorAll('[data-menu]').forEach(el => el.classList.toggle('active', el.dataset.menu === menu));
-  document.getElementById('skuPanel').hidden = menu !== 'skuqr';
-  document.getElementById('listControls').hidden = menu === 'skuqr';
+
+  const isSku = menu === 'skuqr';
+  const isAlert = menu === 'alerts';
+  document.getElementById('skuPanel').hidden = !isSku;
+  document.getElementById('alertCenter').hidden = !isAlert;
+  document.getElementById('listControls').hidden = isSku || isAlert;
+  document.getElementById('statsPanel').hidden = isAlert;
+  document.getElementById('content').hidden = isAlert;
   document.getElementById('statusFilters').hidden = menu !== 'full';
-  if (menu !== 'skuqr') stopScanner();
+
+  if (!isSku) stopScanner();
+  if (isAlert) {
+    loadAlerts();
+    return;
+  }
   render();
 }
 
@@ -180,7 +191,7 @@ async function loadAlerts() {
   if (list) list.innerHTML = '<div class="alertEmpty">Memuat Alert Center...</div>';
 
   try {
-    const q = document.getElementById('search') ? document.getElementById('search').value || '' : '';
+    const q = activeAlertSearch || '';
     const res = await api('alerts', { plant: activePlant || 'ALL', q });
     ALERT_ROWS = res.rows || [];
     renderAlertCenter();
@@ -220,13 +231,17 @@ function renderAlertCenter() {
     <button class="chip ${activePlant === p.plant ? 'active' : ''}" data-alert-plant="${escapeHtml(p.plant)}" type="button">${escapeHtml(p.label || p.plant)}</button>
   `).join('');
   const alertTools = `
+    <div class="alertSearchBar">
+      <input id="alertSearch" type="search" value="${escapeAttr(activeAlertSearch)}" placeholder="Cari RM / merk / SKU QR khusus Alert Center..." autocomplete="off" />
+      <button class="btn primary smallBtn" id="downloadAlertBtn" type="button">Download Excel Alert</button>
+    </div>
     <div class="alertToolGroup">
       <span>Plant Pemilik</span>
       <div class="alertTools">${plantTools}</div>
     </div>
     <div class="alertToolGroup">
       <span>Status Alert</span>
-      <div class="alertTools">${filters.map(([key, label]) => `<button class="chip ${activeAlertFilter === key ? 'active' : ''}" data-alert-filter="${key}" type="button">${escapeHtml(label)}</button>`).join('')}<button class="btn primary smallBtn" id="downloadAlertBtn" type="button">Download Excel Alert</button></div>
+      <div class="alertTools">${filters.map(([key, label]) => `<button class="chip ${activeAlertFilter === key ? 'active' : ''}" data-alert-filter="${key}" type="button">${escapeHtml(label)}</button>`).join('')}</div>
     </div>
   `;
 
@@ -237,6 +252,7 @@ function renderAlertCenter() {
     `;
     bindAlertFilterButtons(list);
     bindAlertPlantButtons(list);
+    bindAlertSearchInput(list);
     bindAlertDownloadButton(list);
     return;
   }
@@ -266,6 +282,7 @@ function renderAlertCenter() {
 
   bindAlertFilterButtons(list);
   bindAlertPlantButtons(list);
+  bindAlertSearchInput(list);
   bindAlertDownloadButton(list);
   list.querySelectorAll('[data-alert-index]').forEach(row => {
     row.addEventListener('click', () => openAlertBatch(window.__alertRows[Number(row.dataset.alertIndex)]));
@@ -286,6 +303,21 @@ function bindAlertPlantButtons(root) {
     btn.addEventListener('click', () => {
       setPlant(btn.dataset.alertPlant || 'ALL');
     });
+  });
+}
+
+function bindAlertSearchInput(root) {
+  const input = root.querySelector('#alertSearch');
+  if (!input) return;
+  input.addEventListener('input', () => {
+    activeAlertSearch = input.value || '';
+    scheduleLoadAlerts();
+  });
+  input.addEventListener('keydown', event => {
+    if (event.key === 'Enter') {
+      activeAlertSearch = input.value || '';
+      loadAlerts();
+    }
   });
 }
 
@@ -392,6 +424,10 @@ function openAlertBatch(batch) {
 }
 
 function render() {
+  if (activeMenu === 'alerts') {
+    renderAlertCenter();
+    return;
+  }
   if (activeMenu === 'skuqr') {
     renderSkuResults();
     return;
@@ -567,7 +603,7 @@ function exportAlertRowsToExcel(title, rows, meta) {
   const printedAt = new Date().toLocaleString('id-ID');
   const plantText = meta && meta.plant ? meta.plant : (activePlant || 'ALL');
   const filterText = meta && meta.filterLabel ? meta.filterLabel : (ALERT_FILTER_LABELS[activeAlertFilter] || activeAlertFilter || '-');
-  const qText = document.getElementById('search') ? document.getElementById('search').value || '' : '';
+  const qText = activeAlertSearch || '';
   const safeTitle = title.replace(/[^A-Z0-9_ -]/gi, '_');
 
   const tableRows = rows.map((row, idx) => {
@@ -1111,4 +1147,8 @@ function renderExpiryBadge(expiredText) {
 
 function escapeHtml(v) {
   return String(v ?? '').replace(/[&<>'"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]));
+}
+
+function escapeAttr(v) {
+  return escapeHtml(v).replace(/`/g, '&#96;');
 }
