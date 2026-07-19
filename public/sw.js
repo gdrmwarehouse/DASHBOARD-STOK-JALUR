@@ -1,4 +1,4 @@
-const CACHE_NAME = 'stok-jalur-shell-v8-alert-plant-excel';
+const CACHE_NAME = 'stok-jalur-shell-v9-alert-menu4';
 
 const APP_SHELL = [
   '/',
